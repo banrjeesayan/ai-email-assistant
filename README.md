@@ -16,14 +16,65 @@ The application uses a FastAPI backend, a React/Vite frontend, and Google Gemini
 - Browse built-in sample emails for quick testing.
 - View formatted analysis results or raw JSON output.
 
-## Tech Stack
+## Tech Stack, Frameworks & Libraries
 
-| Layer | Technology |
-| --- | --- |
-| Frontend | React, Vite, lucide-react |
-| Backend | Python, FastAPI, Pydantic |
-| AI Provider | Google Gemini through `google-genai` |
-| Configuration | `.env`, `python-dotenv` |
+| Category | Component / Tool | Version | Role & Specific Responsibility |
+| --- | --- | --- | --- |
+| **Frontend Framework** | **React** | `^18.3.1` | Manages component state, dynamic UI rendering, and user interactions. |
+| **Build & Tooling** | **Vite** | `^6.0.7` | Provides high-speed dev server with HMR and builds optimized production bundles. |
+| **UI Icons** | **Lucide React** | `^0.469.0` | Modern SVG iconography for metrics, urgency tags, sentiments, and action states. |
+| **Styling** | **Vanilla CSS** | Modern CSS3 | Custom responsive layout, dark/light theme styling, and glassmorphic dashboards. |
+| **API Client** | **Fetch API** | Native | Asynchronous HTTP requests between client and backend (`api.js`). |
+| **Backend Framework** | **FastAPI** | `0.115.8` | REST API routing, CORS handling, request parsing, and error orchestration. |
+| **ASGI Server** | **Uvicorn** | `0.34.0` | Asynchronous web server hosting the FastAPI application. |
+| **Data Validation** | **Pydantic** | `2.10.6` | Strict schema validation, type enforcement, data coercion, and field validators. |
+| **AI Client SDK** | **google-genai** | `1.5.0` | Official Google GenAI SDK communicating with Gemini in structured JSON mode. |
+| **AI Model** | **Gemini 3.1 Flash Lite** | `gemini-3.1-flash-lite` | LLM for intent extraction, deadline resolution, sentiment scoring, and reply generation. |
+| **Configuration** | **python-dotenv** | `1.0.1` | Secure environment variable loading and multi-key pool management from `.env`. |
+| **Evaluation Suite** | **evaluator.py** | Built-in | Benchmarks model quality against 28 ground-truth test cases across 5 metrics. |
+
+## System Architecture
+
+```mermaid
+flowchart TD
+    subgraph Client["Frontend Layer (React + Vite)"]
+        UI["User Interface (App.jsx)"]
+        Auth["Auth Check (LoginPage.jsx)"]
+        Input["Email Input & Context Form"]
+        Samples["Sample Selector (28 Emails)"]
+        Dashboard["Analysis View & Benchmark Dashboard"]
+    end
+
+    subgraph Server["Backend Layer (FastAPI)"]
+        Router["FastAPI Application (main.py)"]
+        CORS["CORS Middleware"]
+        Analyzer["Analysis Pipeline (analyzer.py)"]
+        KeyPool["11-Key Gemini Rotation Manager"]
+        Normalizer["JSON Normalizer & Cleaner"]
+        Schema["Pydantic Schema Validator (schemas.py)"]
+        Evaluator["Benchmark Evaluation Suite (evaluator.py)"]
+    end
+
+    subgraph AI["AI Layer (Google Gemini)"]
+        Gemini["Google Gemini Model (gemini-3.1-flash-lite)"]
+    end
+
+    UI --> Auth
+    Auth --> Input
+    Samples --> Input
+    Input -->|POST /api/analyze| Router
+    Router --> CORS
+    CORS --> Analyzer
+    Analyzer --> KeyPool
+    KeyPool -->|google-genai SDK| Gemini
+    Gemini -->|Raw JSON / Markdown| Analyzer
+    Analyzer --> Normalizer
+    Normalizer --> Schema
+    Schema -- "Validation Fails" -->|Self-Correction Retry| Gemini
+    Schema -- "Validated Object" --> Router
+    Router -->|JSON Response| Dashboard
+```
+
 
 ## Project Structure
 
@@ -183,15 +234,55 @@ Password: admin
 }
 ```
 
-## Analysis Pipeline
+## End-to-End Workflow Stages
 
-1. The frontend sends the email content and user context to `/api/analyze`.
-2. The backend builds a structured prompt with the user profile, received timestamp, sender, recipients, subject, and body.
-3. Gemini returns JSON using a low-temperature configuration.
-4. The backend cleans and normalizes the response.
-5. Pydantic validates the result against the email analysis schema.
-6. If validation fails, the backend retries once with the validation error included.
-7. The API returns structured analysis and a draft response to the frontend.
+The application executes each analysis through six distinct pipeline stages:
+
+### Stage 1: User Authentication & Context Ingestion (Frontend)
+- **Components & Tools:** `LoginPage.jsx`, `EmailAnalyzer.jsx`, `SampleSelector.jsx`, React 18, Lucide React.
+- **Workflow:**
+  1. The user logs in via `LoginPage.jsx` (demo authentication session).
+  2. The user sets their executive context: `user_name`, `user_role`, `tone` (e.g., *professional but warm*), and `signoff` (e.g., *Best regards, Alex*).
+  3. The user inputs email details (`received_at`, `sender`, `recipients`, `subject`, `body`) or loads one of the 28 benchmark emails.
+  4. The client dispatches an HTTP POST request to `/api/analyze` using the native Fetch API (`api.js`).
+
+### Stage 2: Request Parsing & Schema Validation (Backend Gateway)
+- **Components & Tools:** `main.py`, `schemas.py`, FastAPI, Pydantic v2.
+- **Workflow:**
+  1. FastAPI receives the request payload and validates it against the `AnalyzeEmailRequest` Pydantic model.
+  2. CORS middleware ensures secure cross-origin communication between the Vite frontend (`:3000`) and FastAPI backend (`:8000`).
+  3. The validated request object is passed to `analyze_email()` in `analyzer.py`.
+
+### Stage 3: Prompt Engineering & Injection Defense
+- **Components & Tools:** `analyzer.py` (`format_prompt`, `SYSTEM_PROMPT`).
+- **Workflow:**
+  1. Constructs an immutable system prompt combining executive instructions with the user's personal context and incoming email data.
+  2. **Prompt Injection Defense:** Strict constraints instruct the model to treat email text purely as **DATA**, blocking prompt injection attempts.
+  3. **Temporal Grounding:** Uses `RECEIVED_AT` and timezone to anchor relative time expressions (`"tomorrow"`, `"EOD Friday"`) into exact calendar dates.
+  4. **Hallucination Prevention:** Enforces `[CONFIRM: ...]` placeholder generation for missing information rather than fabricating facts.
+
+### Stage 4: LLM Inference & Dynamic Key Rotation
+- **Components & Tools:** `analyzer.py` (`_call_gemini`, `_rotate_key`), `google-genai` SDK, Google Gemini (`gemini-3.1-flash-lite`).
+- **Workflow:**
+  1. Initializes `genai.Client` with the active key from an 11-key pool loaded via `python-dotenv`.
+  2. Invokes Gemini with low temperature (`0.1`), token ceiling (`900`), and `response_mime_type="application/json"`.
+  3. **Automated Key Failover:** Intercepts HTTP `429`, `RESOURCE_EXHAUSTED`, and quota errors; immediately rotates to the next available API key in the pool and retries without user-visible failures.
+
+### Stage 5: JSON Cleansing, Schema Normalization & Self-Correction
+- **Components & Tools:** `analyzer.py` (`clean_json`, `normalize`, `_ensure_body`), `schemas.py`, Pydantic v2.
+- **Workflow:**
+  1. `clean_json()` strips any extraneous markdown enclosures (````json ... ````).
+  2. `normalize()` canonicalizes schema variations, repairs nested intent/urgency/sentiment blocks, and maps synonymous keys.
+  3. Validates the normalized dictionary against `EmailAnalysisResult`.
+  4. **Self-Correction Retry Loop:** If validation fails, the backend captures the `ValidationError` details, builds a targeted repair prompt, queries Gemini for corrected JSON, and re-validates.
+  5. `_ensure_body()` guarantees that a draft reply is present whenever `reply_needed` is `true`.
+
+### Stage 6: Dashboard Visualization & User Review (Frontend)
+- **Components & Tools:** `AnalysisView.jsx`, `BenchmarkView.jsx`, Lucide React, Custom CSS.
+- **Workflow:**
+  1. Receives the validated `EmailAnalysisResult` alongside execution metadata (e.g., active key number and model identifier).
+  2. Renders structured executive intelligence: summary cards, intent badges, urgency/sentiment ratings, risk warning chips, action items with ownership tags, and resolved deadlines.
+  3. Displays an interactive draft reply editor with one-click copy and raw JSON view for auditing.
 
 ## Response Schema
 
