@@ -327,7 +327,3 @@ The model returns these main fields:
 - Add request logging, rate limiting, and monitoring.
 - Add automated tests for the API contract and schema normalization.
 - Implement `/api/benchmark` or remove the benchmark UI until the route is available.
-
-## License
-
-No license file is currently included. Add a license before publishing or distributing this project.
