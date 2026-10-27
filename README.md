@@ -1,4 +1,6 @@
 AI Executive Email Assistant
+
+
 A full-stack email analysis assistant that turns an incoming email into structured insight, action items, deadline detection, risk flags, and a ready-to-edit draft reply.
 
 The application uses a FastAPI backend, a React/Vite frontend, and Google Gemini for AI-powered analysis. It is designed for executive-style inbox workflows where speed, accuracy, and clear follow-up matter.
